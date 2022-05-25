@@ -101,7 +101,6 @@ func (p *SyncPipe) Sync() {
 }
 
 func (p *SyncPipe) SyncGroup(parent *gitlab.Group) error {
-
 	if parent == nil {
 		topLevelOnly := true
 		p.UpdateStatus(SyncPipeStatusGetFromGroups)
@@ -142,13 +141,15 @@ func (p *SyncPipe) SyncGroup(parent *gitlab.Group) error {
 				toGroup = toGroupT.(*gitlab.Group)
 			}
 			p.groupMap[fromGroup] = toGroup
-			p.SyncGroupProject(fromGroup, toGroup)
+			err := p.SyncGroupProject(fromGroup, toGroup)
+			if err != nil {
+				//TODO log
+			}
 		}
-
 	} else {
 
 	}
-
+	return nil
 }
 
 func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Group) error {
@@ -188,18 +189,79 @@ func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Gro
 			}
 		}
 		p.projectMap[toProject] = toProject
-		p.SyncProjectData(fromProject, toProject)
+		err := p.SyncProjectData(fromProject, toProject)
+		if err != nil {
+			//TODO log
+		}
 	}
+	return nil
 }
 
 func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) error {
+	err, syncMap := p.SyncBranch(from, to)
+	if err != nil {
+		return err
+	}
+	for fromBranch, toBranch := range syncMap {
+		if strings.ToUpper(fromBranch.Commit.ID) != strings.ToUpper(toBranch.Commit.ID) {
+			err := p.PushTo(from, to, fromBranch)
+			if err != nil {
+				//TODO log
+			}
+		}
+	}
+	return nil
+}
+
+func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
+	repo, err := git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
+		Auth: &http.BasicAuth{
+			Username: "gl2gl_sync", // yes, this can be anything except an empty string
+			Password: p.FromAccessToken,
+		},
+		SingleBranch: true,
+		URL:          from.HTTPURLToRepo,
+		RemoteName:   "from",
+	})
+	branch, err := repo.Branch(fromBranch.Name)
+	if err != nil {
+		return err
+		//TODO log 不存在
+	}
+	remote, err := repo.CreateRemote(&config.RemoteConfig{
+		Name:  "to",
+		URLs:  []string{to.HTTPURLToRepo},
+		Fetch: nil,
+	})
+	if err != nil {
+		return err
+		//TODO log 指定远程错误
+	}
+	//tagName1^{}:refs/heads/branch
+	refSpecs := []config.RefSpec{config.RefSpec(fmt.Sprintf("refs/heads/%s", branch.Name))}
+	err = remote.Push(&git.PushOptions{
+		RefSpecs:   refSpecs,
+		RemoteName: "to",
+		Auth: &http.BasicAuth{
+			Username: "gl2gl_sync", // yes, this can be anything except an empty string
+			Password: p.ToAccessToken,
+		},
+	})
+	if err != nil {
+		return err
+		//TODO log push错误
+	}
+	return nil
+}
+
+func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, map[*gitlab.Branch]*gitlab.Branch) {
 	p.UpdateStatus(SyncPipeStatusGetFromBranches)
 	fromBranches, _, err := p.FromClient.Branches.ListBranches(from.ID, &gitlab.ListBranchesOptions{
 		ListOptions: gitlab.ListOptions{PerPage: 100},
 	})
 	if err != nil {
 		p.UpdateStatus(SyncPipeStatusGetFromBranchesError)
-		return err
+		return err, nil
 	}
 	p.UpdateStatus(SyncPipeStatusGetToBranches)
 	toBranches, _, err := p.ToClient.Branches.ListBranches(to.ID, &gitlab.ListBranchesOptions{
@@ -207,50 +269,29 @@ func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) err
 	})
 	if err != nil {
 		p.UpdateStatus(SyncPipeStatusGetToBranchesError)
-		return err
+		return err, nil
 	}
+
+	branchMap := make(map[*gitlab.Branch]*gitlab.Branch)
 	for _, fromBranch := range fromBranches {
 		toBranchT := linq.From(toBranches).WhereT(
 			func(b *gitlab.Branch) bool {
 				return b.Name == fromBranch.Name
 			}).First()
-		var toBranch *gitlab.Branch
-		if toBranchT != nil {
-			toBranch = toBranchT.(*gitlab.Branch)
-		} else {
-			repo, err := git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
-				Auth: &http.BasicAuth{
-					Username: "none", // yes, this can be anything except an empty string
-					Password: p.FromAccessToken,
-				},
-				SingleBranch: true,
-				URL:          from.HTTPURLToRepo,
-				RemoteName:   "from",
-			})
-			_, err = repo.Branch(fromBranch.Name)
+
+		if toBranchT == nil {
+			err := p.PushTo(from, to, fromBranch)
 			if err != nil {
+				//TODO log
 				continue
-				//TODO log 不存在
 			}
-			refToPush := "tagName1^{}"
-			refspecs := []config.RefSpec{config.RefSpec(refToPush + ":refs/heads/master")}
-
-			err = repo.Push(&git.PushOptions{
-				RemoteName: "origin",
-				RefSpecs:   refspecs,
-			})
-			repo.Push(&git.PushOptions{
-				RemoteName:        "to",
-				RefSpecs:          nil,
-				Auth:              nil,
-				Progress:          nil,
-				Prune:             false,
-				Force:             false,
-				InsecureSkipTLS:   false,
-				CABundle:          nil,
-				RequireRemoteRefs: nil,
-			})
+			toBranch, _, err := p.ToClient.Branches.GetBranch(to.ID, fromBranch.Name)
+			if err != nil {
+				//TODO log
+				continue
+			}
+			branchMap[fromBranch] = toBranch
 		}
-
 	}
+	return nil, branchMap
 }
