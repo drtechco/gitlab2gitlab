@@ -1,15 +1,19 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"drtech.co/gl2gl/orm"
 	"fmt"
 	"github.com/ahmetb/go-linq/v3"
+	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/sirupsen/logrus"
 	"github.com/xanzy/go-gitlab"
 	"strings"
 	"time"
@@ -25,9 +29,7 @@ type SyncPipe struct {
 	ToClient        *gitlab.Client
 	Status          SyncPipeStatus
 
-	groupMap   map[*gitlab.Group]*gitlab.Group
-	projectMap map[*gitlab.Project]*gitlab.Project
-	userMap    map[*gitlab.User]*gitlab.User
+	logger *logrus.Entry
 }
 
 func (p *SyncPipe) Stop() error {
@@ -35,15 +37,12 @@ func (p *SyncPipe) Stop() error {
 }
 
 func (p *SyncPipe) Run() error {
-	p.groupMap = make(map[*gitlab.Group]*gitlab.Group)
-	p.projectMap = make(map[*gitlab.Project]*gitlab.Project)
-	p.userMap = make(map[*gitlab.User]*gitlab.User)
+	p.logger = logrus.WithField("Name", "SyncPipe")
 	p.UpdateStatus(SyncPipeStatusIniting)
 	fromClient, err := gitlab.NewClient(p.FromAccessToken, gitlab.WithBaseURL(
 		fmt.Sprintf("%s/api/v4", p.FromAddress),
 	))
 	if err != nil {
-		//TODO log
 		p.UpdateStatus(SyncPipeStatusFromClientInitError)
 		return err
 	}
@@ -51,7 +50,6 @@ func (p *SyncPipe) Run() error {
 		fmt.Sprintf("%s/api/v4", p.ToAddress),
 	))
 	if err != nil {
-		//TODO log
 		p.UpdateStatus(SyncPipeStatusToClientInitError)
 		return err
 	}
@@ -67,92 +65,87 @@ func (p *SyncPipe) UpdateStatus(status SyncPipeStatus) {
 	_, err := fromToConfigM.WithContext(context.Background()).
 		Where(fromToConfigM.ID.Eq(sql.NullInt64{Int64: p.ConfigId, Valid: true})).Update(fromToConfigM.Status, status)
 	if err != nil {
-		//TODO log
+		p.logger.Error("UpdateStatus:", err)
 	}
 }
 
 func (p *SyncPipe) Sync() {
 	for {
-		p.SyncGroup(nil)
-		p.UpdateStatus(SyncPipeStatusGetFromProjects)
-		fromProjects, _, err := p.FromClient.Projects.ListProjects(&gitlab.ListProjectsOptions{})
+		err := p.SyncUser()
 		if err != nil {
-			//TODO log
-			p.UpdateStatus(SyncPipeStatusGetFromProjectsError)
-			time.Sleep(10 * time.Second)
-			break
+			p.logger.Error("SyncUser:", err)
 		}
-		for _, project := range fromProjects {
-			fmt.Println(project.PathWithNamespace)
+		err = p.SyncGroup(nil, nil)
+		if err != nil {
+			p.logger.Error("SyncGroup:", err)
 		}
-		fmt.Println(fromProjects)
-		//toProjects, _, err := p.ToClient.Projects.ListProjects(&gitlab.ListProjectsOptions{})
-		//if err != nil {
-		//	//TODO log
-		//	p.UpdateStatus(SyncPipeStatusGetToProjectsError)
-		//	time.Sleep(10 * time.Second)
-		//	break
-		//}
-		//fromProjectMap=make()
-		//for _, project := range fromProjects {
-		//	project.PathWithNamespace
-		//}
+		time.Sleep(time.Second * 120)
 	}
 }
 
-func (p *SyncPipe) SyncGroup(parent *gitlab.Group) error {
-	if parent == nil {
+func (p *SyncPipe) SyncGroup(parentFrom *gitlab.Group, parentTo *gitlab.Group) error {
+	if parentFrom == nil {
+		p.logger.Debug("开始同步Root Group")
 		topLevelOnly := true
 		p.UpdateStatus(SyncPipeStatusGetFromGroups)
+		p.logger.Trace("开始获取源库Root Group")
 		fromGroups, _, err := p.FromClient.Groups.ListGroups(&gitlab.ListGroupsOptions{
 			TopLevelOnly: &topLevelOnly,
 			ListOptions:  gitlab.ListOptions{PerPage: 100},
 		})
 		if err != nil {
-			//TODO log
 			p.UpdateStatus(SyncPipeStatusGetFromGroupsError)
-			time.Sleep(10 * time.Second)
+			return err
 		}
+		p.logger.WithField("FromGroups", fromGroups).Trace("完成获取源库Root Group")
 		p.UpdateStatus(SyncPipeStatusGetToGroups)
+		p.logger.Trace("开始获取目标库Root Group")
 		toGroups, _, err := p.ToClient.Groups.ListGroups(&gitlab.ListGroupsOptions{
 			TopLevelOnly: &topLevelOnly,
 			ListOptions:  gitlab.ListOptions{PerPage: 100},
 		})
 		if err != nil {
-			//TODO log
 			p.UpdateStatus(SyncPipeStatusGetToGroupsError)
-			time.Sleep(10 * time.Second)
+			return err
 		}
-		for _, fromGroup := range fromGroups {
-			toGroupT := linq.From(toGroups).
-				WhereT(func(g *gitlab.Group) bool {
-					return strings.ToUpper(g.Path) == strings.ToUpper(fromGroup.Path)
-				}).First()
-			var toGroup *gitlab.Group
-			if toGroup == nil {
-				p.UpdateStatus(SyncPipeStatusCreateToGroup)
-				toGroup, _, err = p.ToClient.Groups.CreateGroup(&gitlab.CreateGroupOptions{Path: &fromGroup.Path, Name: &fromGroup.Name})
-				if err != nil {
-					p.UpdateStatus(SyncPipeStatusCreateToGroupErr)
-					//TODO log
-					continue
-				}
-			} else {
-				toGroup = toGroupT.(*gitlab.Group)
-			}
-			p.groupMap[fromGroup] = toGroup
-			err := p.SyncGroupProject(fromGroup, toGroup)
-			if err != nil {
-				//TODO log
-			}
-		}
+		p.logger.WithField("ToGroups", toGroups).Trace("完成获取目标库Root Group")
+		p.SyncGroupList(fromGroups, toGroups, nil)
+		p.logger.Debug("完成同步Root Group")
 	} else {
-
+		p.logger.
+			WithField("ParentFrom", p.ShortGroup(parentFrom)).
+			WithField("ParentTo", p.ShortGroup(parentTo)).
+			Debug("开始同步Group")
+		fromGroups, _, err := p.FromClient.Groups.ListSubGroups(parentFrom.ID, &gitlab.ListSubGroupsOptions{
+			ListOptions: gitlab.ListOptions{PerPage: 100},
+		})
+		if err != nil {
+			return err
+		}
+		p.logger.
+			WithField("ParentFrom", p.ShortGroup(parentFrom)).
+			WithField("FromGroups", p.ShortGroups(fromGroups)).
+			Trace("获取到源库的Group信息")
+		toGroups, _, err := p.ToClient.Groups.ListSubGroups(parentTo.ID, &gitlab.ListSubGroupsOptions{
+			ListOptions: gitlab.ListOptions{PerPage: 100},
+		})
+		if err != nil {
+			return err
+		}
+		p.logger.
+			WithField("ParentTo", p.ShortGroup(parentTo)).
+			WithField("ToGroups", p.ShortGroups(toGroups)).
+			Trace("获取到目标库的Group信息")
+		p.SyncGroupList(fromGroups, toGroups, parentTo)
 	}
 	return nil
 }
 
 func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Group) error {
+	p.logger.
+		WithField("FromGroup", p.ShortGroup(formGroup)).
+		WithField("ToGroup", p.ShortGroup(toGroup)).
+		Debug("开始同步Group的Projects")
 	p.UpdateStatus(SyncPipeStatusGetFromGroupProjects)
 	fromProjects, _, err := p.FromClient.Groups.ListGroupProjects(formGroup.ID, &gitlab.ListGroupProjectsOptions{
 		ListOptions: gitlab.ListOptions{PerPage: 100},
@@ -161,6 +154,10 @@ func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Gro
 		p.UpdateStatus(SyncPipeStatusGetFromGroupProjectsErr)
 		return err
 	}
+	p.logger.
+		WithField("FromGroup", p.ShortGroup(formGroup)).
+		WithField("FromProjects", p.ShortProjects(fromProjects)).
+		Trace("获取到源库Projects")
 	p.UpdateStatus(SyncPipeStatusGetToGroupProjects)
 	toProjects, _, err := p.ToClient.Groups.ListGroupProjects(toGroup.ID, &gitlab.ListGroupProjectsOptions{
 		ListOptions: gitlab.ListOptions{PerPage: 100},
@@ -169,6 +166,10 @@ func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Gro
 		p.UpdateStatus(SyncPipeStatusGetFromGroupProjectsErr)
 		return err
 	}
+	p.logger.
+		WithField("ToGroup", p.ShortGroup(toGroup)).
+		WithField("ToProjects", p.ShortProjects(toProjects)).
+		Trace("获取到目标库Projects")
 	for _, fromProject := range fromProjects {
 		toProjectT := linq.From(toProjects).WhereT(
 			func(p *gitlab.Project) bool {
@@ -178,35 +179,65 @@ func (p *SyncPipe) SyncGroupProject(formGroup *gitlab.Group, toGroup *gitlab.Gro
 		if toProjectT != nil {
 			toProject = toProjectT.(*gitlab.Project)
 		} else {
+			p.logger.
+				WithField("FromGroup", p.ShortGroup(formGroup)).
+				WithField("ToGroup", p.ShortGroup(toGroup)).
+				WithField("FromProject", p.ShortProject(fromProject)).
+				Debug("目标库的的Project不存在，开始创建")
 			p.UpdateStatus(SyncPipeStatusCreateToProject)
 			toProject, _, err = p.ToClient.Projects.CreateProject(&gitlab.CreateProjectOptions{
 				Path: &fromProject.Path,
-				Name: &fromProject.Name})
+				Name: &fromProject.Name, NamespaceID: &toGroup.ID})
 			if err != nil {
 				p.UpdateStatus(SyncPipeStatusCreateToProjectErr)
+				p.logger.WithField("NamespaceID", toGroup.ID).
+					WithField("Path", fromProject.Path).
+					WithField("Name", fromProject.Name).
+					Error("CreateProject:", err)
 				continue
-				//TODO log
 			}
+			p.logger.
+				WithField("FromGroup", p.ShortGroup(formGroup)).
+				WithField("ToGroup", p.ShortGroup(toGroup)).
+				WithField("FromProject", p.ShortProject(fromProject)).
+				Debug("完成目标库的的Project创建")
 		}
-		p.projectMap[toProject] = toProject
 		err := p.SyncProjectData(fromProject, toProject)
 		if err != nil {
-			//TODO log
+			p.logger.WithField("FromProject", p.ShortProject(fromProject)).
+				WithField("ToProject", p.ShortProject(toProject)).
+				Error("SyncProjectData:", err)
 		}
 	}
+	p.logger.
+		WithField("FromGroup", p.ShortGroup(formGroup)).
+		WithField("ToGroup", p.ShortGroup(toGroup)).
+		Debug("完成同步Group的Projects")
 	return nil
 }
 
 func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) error {
+	p.logger.WithField("FromProject", p.ShortProject(from)).
+		WithField("ToProject", p.ShortProject(to)).
+		Debug("开始同步Project数据")
 	err, syncMap := p.SyncBranch(from, to)
 	if err != nil {
 		return err
 	}
 	for fromBranch, toBranch := range syncMap {
+		p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).
+			WithField("ToBranch", p.ShortBranch(toBranch)).
+			Trace("对比Commit")
 		if strings.ToUpper(fromBranch.Commit.ID) != strings.ToUpper(toBranch.Commit.ID) {
+			p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).
+				WithField("ToBranch", p.ShortBranch(toBranch)).
+				Debug("Commit不一样，同步分支")
 			err := p.PushTo(from, to, fromBranch)
 			if err != nil {
-				//TODO log
+				p.logger.WithField("FromProject", p.ShortProject(from)).
+					WithField("ToProject", p.ShortProject(to)).
+					WithField("FromBranch", p.ShortBranch(fromBranch)).
+					Error("PushTo:", err)
 			}
 		}
 	}
@@ -214,32 +245,54 @@ func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) err
 }
 
 func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
-	repo, err := git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
+	p.logger.
+		WithField("FromProject", p.ShortProject(from)).
+		WithField("ToProject", p.ShortProject(to)).
+		WithField("FromBranch", p.ShortBranch(fromBranch)).
+		Debug("开始推送分支")
+	repo, err := git.Init(memory.NewStorage(), memfs.New())
+	if err != nil {
+		return err
+	}
+	p.logger.Trace("创建git内存库")
+	currentConfig, err := repo.Config()
+	if err != nil {
+		return err
+	}
+	currentConfig.Remotes["from"] = &config.RemoteConfig{
+		Name: "from",
+		URLs: []string{from.HTTPURLToRepo},
+	}
+	currentConfig.Remotes["to"] = &config.RemoteConfig{
+		Name: "to",
+		URLs: []string{to.HTTPURLToRepo},
+	}
+	p.logger.WithField("Remotes", currentConfig.Remotes).Trace("配置git Remotes")
+	err = repo.SetConfig(currentConfig)
+	if err != nil {
+		return err
+	}
+	workTree, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+	err = workTree.Pull(&git.PullOptions{
+		RemoteName:    "from",
+		ReferenceName: plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", fromBranch.Name)),
+		SingleBranch:  true,
 		Auth: &http.BasicAuth{
 			Username: "gl2gl_sync", // yes, this can be anything except an empty string
 			Password: p.FromAccessToken,
 		},
-		SingleBranch: true,
-		URL:          from.HTTPURLToRepo,
-		RemoteName:   "from",
 	})
-	branch, err := repo.Branch(fromBranch.Name)
+	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("拉取远程分支代码")
 	if err != nil {
 		return err
-		//TODO log 不存在
 	}
-	remote, err := repo.CreateRemote(&config.RemoteConfig{
-		Name:  "to",
-		URLs:  []string{to.HTTPURLToRepo},
-		Fetch: nil,
-	})
-	if err != nil {
-		return err
-		//TODO log 指定远程错误
+	refSpecs := []config.RefSpec{
+		config.RefSpec(fmt.Sprintf("+refs/heads/master:refs/heads/%s", fromBranch.Name)),
 	}
-	//tagName1^{}:refs/heads/branch
-	refSpecs := []config.RefSpec{config.RefSpec(fmt.Sprintf("refs/heads/%s", branch.Name))}
-	err = remote.Push(&git.PushOptions{
+	err = repo.Push(&git.PushOptions{
 		RefSpecs:   refSpecs,
 		RemoteName: "to",
 		Auth: &http.BasicAuth{
@@ -247,15 +300,17 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 			Password: p.ToAccessToken,
 		},
 	})
-	if err != nil {
-		return err
-		//TODO log push错误
-	}
-	return nil
+	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("推送本地分支到远程分支")
+	return err
 }
 
 func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, map[*gitlab.Branch]*gitlab.Branch) {
+	p.logger.WithField("FromProject", p.ShortProject(from)).
+		WithField("ToProject", p.ShortProject(to)).
+		Debug("开始同步Project的分支")
 	p.UpdateStatus(SyncPipeStatusGetFromBranches)
+	p.logger.WithField("FromProject", p.ShortProject(from)).
+		Trace("开始获取源库Project的分支")
 	fromBranches, _, err := p.FromClient.Branches.ListBranches(from.ID, &gitlab.ListBranchesOptions{
 		ListOptions: gitlab.ListOptions{PerPage: 100},
 	})
@@ -263,6 +318,12 @@ func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, 
 		p.UpdateStatus(SyncPipeStatusGetFromBranchesError)
 		return err, nil
 	}
+	p.logger.WithField("FromProject", p.ShortProject(from)).
+		WithField("FromBranches", p.ShortBranches(fromBranches)).
+		Trace("完成获取源库Project的分支")
+
+	p.logger.WithField("ToProject", p.ShortProject(to)).
+		Trace("开始获取目标库Project的分支")
 	p.UpdateStatus(SyncPipeStatusGetToBranches)
 	toBranches, _, err := p.ToClient.Branches.ListBranches(to.ID, &gitlab.ListBranchesOptions{
 		ListOptions: gitlab.ListOptions{PerPage: 100},
@@ -271,27 +332,309 @@ func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, 
 		p.UpdateStatus(SyncPipeStatusGetToBranchesError)
 		return err, nil
 	}
-
+	p.logger.
+		WithField("ToProject", p.ShortProject(to)).
+		WithField("ToBranches", p.ShortBranches(toBranches)).
+		Trace("完成获取目标库Project的分支")
 	branchMap := make(map[*gitlab.Branch]*gitlab.Branch)
 	for _, fromBranch := range fromBranches {
 		toBranchT := linq.From(toBranches).WhereT(
 			func(b *gitlab.Branch) bool {
 				return b.Name == fromBranch.Name
 			}).First()
-
+		var toBranch *gitlab.Branch
 		if toBranchT == nil {
+			p.logger.
+				WithField("FromProject", p.ShortProject(from)).
+				WithField("ToProject", p.ShortProject(to)).
+				WithField("FromBranch", p.ShortBranch(fromBranch)).
+				Debug("目标库的的分支不存在，开始创建")
 			err := p.PushTo(from, to, fromBranch)
 			if err != nil {
-				//TODO log
+				p.logger.WithField("FromProject", p.ShortProject(from)).
+					WithField("ToProject", p.ShortProject(to)).
+					WithField("FromBranch", p.ShortBranch(fromBranch)).
+					Error("PushTo:", err)
 				continue
 			}
-			toBranch, _, err := p.ToClient.Branches.GetBranch(to.ID, fromBranch.Name)
+			toBranch, _, err = p.ToClient.Branches.GetBranch(to.ID, fromBranch.Name)
 			if err != nil {
-				//TODO log
+				p.logger.WithField("ToProject", p.ShortProject(to)).
+					WithField("FromBranch", p.ShortBranch(fromBranch)).
+					Error("GetBranch:", err)
 				continue
 			}
-			branchMap[fromBranch] = toBranch
+			p.logger.
+				WithField("FromProject", p.ShortProject(from)).
+				WithField("ToProject", p.ShortProject(to)).
+				WithField("ToBranch", p.ShortBranch(toBranch)).
+				Debug("完成目标库的的分支创建")
+		} else {
+			toBranch = toBranchT.(*gitlab.Branch)
+		}
+		branchMap[fromBranch] = toBranch
+	}
+	p.logger.WithField("FromProject", p.ShortProject(from)).
+		WithField("ToProject", p.ShortProject(to)).
+		Debug("完成始同步Project的分支")
+	return nil, branchMap
+}
+
+func (p *SyncPipe) SyncGroupList(fromGroups []*gitlab.Group, toGroups []*gitlab.Group, toParentGroup *gitlab.Group) {
+	for _, fromGroup := range fromGroups {
+		toGroupT := linq.From(toGroups).
+			WhereT(func(g *gitlab.Group) bool {
+				return strings.ToUpper(g.Path) == strings.ToUpper(fromGroup.Path)
+			}).First()
+		var err error
+		var toGroup *gitlab.Group
+		if toGroupT == nil {
+			p.logger.WithField("FromGroup", p.ShortGroup(fromGroup)).Debug("目标库Group不存在,开始创建")
+			p.UpdateStatus(SyncPipeStatusCreateToGroup)
+			var parentId *int
+			if toParentGroup != nil {
+				parentId = &toParentGroup.ID
+			}
+			toGroup, _, err = p.ToClient.Groups.CreateGroup(&gitlab.CreateGroupOptions{
+				Path: &fromGroup.Path, Name: &fromGroup.Name, ParentID: parentId,
+			})
+			if err != nil {
+				p.UpdateStatus(SyncPipeStatusCreateToGroupErr)
+				p.logger.WithField("FromGroup", p.ShortGroup(fromGroup)).
+					Error("CreateGroup:", err)
+				continue
+			}
+			p.logger.WithField("ToGroup", p.ShortGroup(toGroup)).Debug("完成目标库Group创建")
+		} else {
+			toGroup = toGroupT.(*gitlab.Group)
+		}
+		err = p.SyncGroupProject(fromGroup, toGroup)
+		if err != nil {
+			p.logger.
+				WithField("FromGroup", p.ShortGroup(fromGroup)).
+				WithField("ToGroup", p.ShortGroup(toGroup)).
+				Error("SyncGroupProject:", err)
+			continue
+		}
+		err = p.SyncGroup(fromGroup, toGroup)
+		if err != nil {
+			p.logger.
+				WithField("FromGroup", p.ShortGroup(fromGroup)).
+				WithField("ToGroup", p.ShortGroup(toGroup)).
+				Error("SyncGroup:", err)
 		}
 	}
-	return nil, branchMap
+}
+
+func (p *SyncPipe) SyncUser() error {
+	p.logger.Debug("开始同步用户..")
+	p.logger.Trace("开始获取源库的用户列表")
+	fromUsers, _, err := p.FromClient.Users.ListUsers(&gitlab.ListUsersOptions{
+		ListOptions: gitlab.ListOptions{PerPage: 100},
+	})
+	p.logger.Trace("获取到源库的用户列表:", p.ShortUsers(fromUsers))
+	if err != nil {
+		return err
+	}
+	p.logger.Trace("开始获取目标库的用户列表")
+	toUsers, _, err := p.ToClient.Users.ListUsers(&gitlab.ListUsersOptions{
+		ListOptions: gitlab.ListOptions{PerPage: 100},
+	})
+	p.logger.Trace("获取到目标库的用户列表:", p.ShortUsers(toUsers))
+	if err != nil {
+		return err
+	}
+	for _, fromUser := range fromUsers {
+		toUserT := linq.From(toUsers).
+			WhereT(func(g *gitlab.User) bool {
+				return strings.ToUpper(g.Username) == strings.ToUpper(fromUser.Username)
+			}).First()
+		var toUser *gitlab.User
+		if toUserT == nil {
+			randomPassword := true
+			p.logger.WithField("FromUser", p.ShortUser(fromUser)).Debug("目标库的的用户不存在，开始创建")
+			toUser, _, err = p.ToClient.Users.CreateUser(&gitlab.CreateUserOptions{
+				Email:               &fromUser.Email,
+				Name:                &fromUser.Name,
+				Username:            &fromUser.Username,
+				ForceRandomPassword: &randomPassword,
+			})
+			p.logger.WithField("ToUser", p.ShortUser(toUser)).Debug("完成目标库的用户创建")
+			if err != nil {
+				p.logger.
+					WithField("FromUser", p.ShortUser(fromUser)).
+					Error("CreateUser:", err)
+				continue
+			}
+		} else {
+			toUser = toUserT.(*gitlab.User)
+		}
+		err := p.SyncUserProjects(fromUser, toUser)
+		if err != nil {
+			p.logger.
+				WithField("FromUser", p.ShortUser(fromUser)).
+				WithField("ToUser", p.ShortUser(toUser)).
+				Error("SyncUserProjects:", err)
+		}
+
+	}
+	return nil
+}
+
+func (p *SyncPipe) SyncUserProjects(fromUser *gitlab.User, toUser *gitlab.User) error {
+	p.logger.
+		WithField("FromUser", p.ShortUser(fromUser)).
+		WithField("ToUser", p.ShortUser(toUser)).
+		Debug("开始同步用户Projects")
+	p.logger.
+		WithField("FromUser", p.ShortUser(fromUser)).
+		Trace("获取源库用户的Projects")
+	formProjects, _, err := p.FromClient.Projects.ListUserProjects(fromUser.ID,
+		&gitlab.ListProjectsOptions{ListOptions: gitlab.ListOptions{PerPage: 100}},
+	)
+	if err != nil {
+		return err
+	}
+	p.logger.WithField("FromUser", p.ShortUser(fromUser)).
+		WithField("FormProjects", p.ShortProjects(formProjects)).
+		Trace("完成源库用户的Projects获取")
+	p.logger.WithField("ToUser", p.ShortUser(toUser)).Trace("获取目标库用户的Projects")
+	toProjects, _, err := p.ToClient.Projects.ListUserProjects(toUser.ID,
+		&gitlab.ListProjectsOptions{ListOptions: gitlab.ListOptions{PerPage: 100}},
+	)
+	if err != nil {
+		return err
+	}
+	p.logger.WithField("ToUser", p.ShortUser(toUser)).
+		WithField("ToProjects", p.ShortProjects(toProjects)).
+		Trace("完成目标库用户的Projects获取")
+	for _, fromProject := range formProjects {
+		toProjectT := linq.From(toProjects).
+			WhereT(func(g *gitlab.Project) bool {
+				return strings.ToUpper(g.PathWithNamespace) == strings.ToUpper(fromProject.PathWithNamespace)
+			}).First()
+		var toProject *gitlab.Project
+		if toProjectT == nil {
+			p.logger.WithField("ToUser", p.ShortUser(toUser)).
+				WithField("FromProject", p.ShortProject(fromProject)).
+				Debug("目标库的用户Project不存在，开始创建")
+			toProject, _, err = p.ToClient.Projects.CreateProjectForUser(
+				toUser.ID,
+				&gitlab.CreateProjectForUserOptions{
+					Name: &fromProject.Name,
+					Path: &fromProject.Path,
+				})
+			p.logger.WithField("ToUser", p.ShortUser(toUser)).
+				WithField("ToProject", p.ShortProject(toProject)).
+				Debug("完成目标库的用户Project创建")
+			if err != nil {
+				p.logger.
+					WithField("ToUser", p.ShortUser(toUser)).
+					WithField("FromProject", p.ShortProject(fromProject)).
+					Error("CreateProjectForUser:", err)
+				continue
+			}
+		} else {
+			toProject = toProjectT.(*gitlab.Project)
+		}
+		err := p.SyncProjectData(fromProject, toProject)
+		if err != nil {
+			p.logger.
+				WithField("FromProject", p.ShortProject(fromProject)).
+				WithField("ToProject", p.ShortProject(toProject)).
+				Error("SyncProjectData:", err)
+			continue
+		}
+	}
+	p.logger.
+		WithField("FromUser", p.ShortUser(fromUser)).
+		WithField("ToUser", p.ShortUser(toUser)).
+		Debug("完成同步用户Projects")
+	return nil
+}
+
+func (p *SyncPipe) ShortGroup(group *gitlab.Group) string {
+	return fmt.Sprintf("ParentId:%d,GroupId:%d,GroupName:%s,WebURL:%s,FullPath:%s",
+		group.ParentID,
+		group.ID,
+		group.Name,
+		group.WebURL,
+		group.FullPath)
+}
+
+func (p *SyncPipe) ShortProjects(projects []*gitlab.Project) string {
+	var buffer bytes.Buffer
+	for i, project := range projects {
+		buffer.WriteString("{")
+		buffer.WriteString(p.ShortProject(project))
+		buffer.WriteString("}")
+		if i < len(projects)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
+}
+
+func (p *SyncPipe) ShortProject(project *gitlab.Project) string {
+	return fmt.Sprintf("NamespaceId:%d,ID:%d,Name:%s,WebURL:%s,PathWithNamespace:%s",
+		project.Namespace.ID,
+		project.ID,
+		project.Name,
+		project.WebURL,
+		project.PathWithNamespace)
+}
+
+func (p *SyncPipe) ShortBranch(branch *gitlab.Branch) string {
+	return fmt.Sprintf("Name:%s,WebURL:%s,Commit.ID:%s,Commit.Messag:%s",
+		branch.Name,
+		branch.WebURL,
+		branch.Commit.ID,
+		branch.Commit.Message)
+}
+
+func (p *SyncPipe) ShortBranches(branches []*gitlab.Branch) string {
+	var buffer bytes.Buffer
+	for i, branch := range branches {
+		buffer.WriteString("{")
+		buffer.WriteString(p.ShortBranch(branch))
+		buffer.WriteString("}")
+		if i < len(branches)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
+}
+
+func (p *SyncPipe) ShortUsers(users []*gitlab.User) string {
+	var buffer bytes.Buffer
+	for i, user := range users {
+		buffer.WriteString("{")
+		buffer.WriteString(p.ShortUser(user))
+		buffer.WriteString("}")
+		if i < len(users)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
+}
+
+func (p *SyncPipe) ShortUser(users *gitlab.User) string {
+	return fmt.Sprintf("Username:%s,Email:%s,Name:%s,WebURL:%s",
+		users.Username,
+		users.Email,
+		users.Name,
+		users.WebURL)
+}
+
+func (p *SyncPipe) ShortGroups(groups []*gitlab.Group) interface{} {
+	var buffer bytes.Buffer
+	for i, group := range groups {
+		buffer.WriteString("{")
+		buffer.WriteString(p.ShortGroup(group))
+		buffer.WriteString("}")
+		if i < len(groups)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
 }
