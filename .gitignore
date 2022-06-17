@@ -5,3 +5,5 @@ asdasd
 
 vendor/
 go.sum
+assets/db2
+.deploy/build.sh
