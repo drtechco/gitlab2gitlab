@@ -4,17 +4,22 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"drtech.co/gl2gl/core/configs"
 	"drtech.co/gl2gl/orm"
+	"errors"
 	"fmt"
 	"github.com/ahmetb/go-linq/v3"
-	"github.com/go-git/go-billy/v5/memfs"
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/sirupsen/logrus"
 	"github.com/xanzy/go-gitlab"
+	"os"
+	"path"
 	"strings"
 	"time"
 )
@@ -241,20 +246,56 @@ func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) err
 			}
 		}
 	}
+	syncMap = nil
 	return nil
 }
-
+func (p *SyncPipe) ensureDir(dirName string) error {
+	err := os.RemoveAll(dirName)
+	if err != nil {
+		p.logger.Warning(err)
+	}
+	err = os.MkdirAll(dirName, 0775)
+	if err == nil {
+		return nil
+	}
+	if os.IsExist(err) {
+		// check that the existing path is a directory
+		info, err := os.Stat(dirName)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return errors.New("path exists but is not a directory")
+		}
+		return nil
+	}
+	return err
+}
 func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
+
+
+	storageDir := path.Join(configs.TempDir, "storage")
+	err := p.ensureDir(storageDir)
+	if err != nil {
+		return err
+	}
+	workTreeDir := path.Join(configs.TempDir, "worktree")
+	err = p.ensureDir(workTreeDir)
+	if err != nil {
+		return err
+	}
 	p.logger.
 		WithField("FromProject", p.ShortProject(from)).
 		WithField("ToProject", p.ShortProject(to)).
 		WithField("FromBranch", p.ShortBranch(fromBranch)).
 		Debug("开始推送分支")
-	repo, err := git.Init(memory.NewStorage(), memfs.New())
+
+	storage := filesystem.NewStorage(osfs.New(storageDir), cache.NewObjectLRUDefault())
+	repo, err := git.Init(storage, osfs.New(workTreeDir))
 	if err != nil {
 		return err
 	}
-	p.logger.Trace("创建git内存库")
+	p.logger.Trace("创建git存储库")
 	currentConfig, err := repo.Config()
 	if err != nil {
 		return err
@@ -300,6 +341,8 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 			Password: p.ToAccessToken,
 		},
 	})
+	repo = nil
+	storage = nil
 	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("推送本地分支到远程分支")
 	return err
 }
@@ -377,6 +420,7 @@ func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, 
 	p.logger.WithField("FromProject", p.ShortProject(from)).
 		WithField("ToProject", p.ShortProject(to)).
 		Debug("完成始同步Project的分支")
+	fromBranches = nil
 	return nil, branchMap
 }
 
