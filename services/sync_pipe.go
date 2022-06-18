@@ -237,6 +237,7 @@ func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) err
 					WithField("ToProject", p.ShortProject(to)).
 					WithField("FromBranch", p.ShortBranch(fromBranch)).
 					Error("PushTo:", err)
+				os.Exit(9)
 			}
 		}
 	}
@@ -266,8 +267,6 @@ func (p *SyncPipe) ensureDir(dirName string) error {
 	return err
 }
 
-
-
 func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
 	p.logger.
 		WithField("FromProject", p.ShortProject(from)).
@@ -279,38 +278,89 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 		return err
 	}
 	p.logger.Trace("创建git存储库")
-	repo, err := git.InitRepository(configs.TempDir, true)
-	defer repo.Free()
-	if err != nil {
-		return errors.New(fmt.Sprintf("InitRepository:%s", err))
-	}
-	fromRemote, err := repo.Remotes.Create("from", from.HTTPURLToRepo)
-	defer fromRemote.Free()
-	if err != nil {
-		return errors.New(fmt.Sprintf("fromRemote Create:%s", err))
-	}
-	fromRemoteCbFun := func() git.RemoteCallbacks {
-		return git.RemoteCallbacks{
-			CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
-				cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.FromAccessToken)
-				return cred, err
-			},
-			CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+	repo, err := git.Clone(from.HTTPURLToRepo, configs.TempDir, &git.CloneOptions{
+		CheckoutOptions: git.CheckoutOptions{
+
+			NotifyCallback: func(why git.CheckoutNotifyType, path string, baseline, target, workdir git.DiffFile) error {
+				p.logger.Logger.Trace(fmt.Sprintf("NotifyCallback why:%d,path:%s,baseline:%s,target:%s,workdir:%s", why, path, baseline.Path, target.Path, workdir.Path))
 				return nil
 			},
-		}
-	}
-	fromRemoteCb := fromRemoteCbFun()
-	err = fromRemote.ConnectFetch(&fromRemoteCb, nil, nil)
+			ProgressCallback: func(path string, completed, total uint) {
+				p.logger.Logger.Trace(fmt.Sprintf("ProgressCallback path:%s,completed:%d,total:%d", path, completed, total))
+			},
+		},
+		FetchOptions: git.FetchOptions{
+			RemoteCallbacks: git.RemoteCallbacks{
+				SidebandProgressCallback: func(str string) error {
+					p.logger.Logger.Trace("SidebandProgressCallback", str)
+					return nil
+				},
+				CompletionCallback: func(c git.RemoteCompletion) error {
+					p.logger.Logger.Trace("CompletionCallback", c)
+					return nil
+				},
+				CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
+					cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.FromAccessToken)
+					errStr := ""
+					if err != nil {
+						errStr = err.Error()
+					}
+					p.logger.Logger.Trace(fmt.Sprintf("CredentialsCallback url:%s,username_from_url:%s,err:%s", url, username_from_url, errStr))
+					return cred, err
+				},
+				TransferProgressCallback: func(stats git.TransferProgress) error {
+					p.logger.Logger.Trace(fmt.Sprintf(
+						"TransferProgressCallback IndexedObjects:%d,LocalObjects:%d,TotalObjects:%d,TotalDeltas:%d,ReceivedObjects:%d,ReceivedBytes:%d",
+						stats.IndexedObjects, stats.LocalObjects, stats.TotalObjects, stats.TotalDeltas, stats.ReceivedObjects, stats.ReceivedBytes,
+					))
+					return nil
+				},
+				UpdateTipsCallback: func(refname string, a *git.Oid, b *git.Oid) error {
+					p.logger.Logger.Trace(fmt.Sprintf("CompletionCallback refname:%s,a:%s,b:%s", refname, a.String(), b.String()))
+					return nil
+				},
+				CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+					p.logger.Logger.Trace(fmt.Sprintf("CertificateCheckCallback cert:%v,CertificateCheckCallback:%s", cert.X509, hostname))
+					return nil
+				},
+				PackProgressCallback: func(stage int32, current, total uint32) error {
+					p.logger.Logger.Trace(fmt.Sprintf("PackProgressCallback stage:%d,current:%d,total:%d", stage, current, total))
+					return nil
+				},
+				PushTransferProgressCallback: func(current, total uint32, bytes uint) error {
+					p.logger.Logger.Trace(fmt.Sprintf("PushTransferProgressCallback current:%d,total:%d,bytes:%d", current, total, bytes))
+					return nil
+				},
+				PushUpdateReferenceCallback: func(refname, status string) error {
+					p.logger.Logger.Trace(fmt.Sprintf("PushUpdateReferenceCallback refname:%s,status:%s", refname, status))
+					return nil
+				},
+			},
+		},
+		Bare:           false,
+		CheckoutBranch: fromBranch.Name,
+	})
 	if err != nil {
-		return errors.New(fmt.Sprintf("fromRemote ConnectFetch:%s", err))
+		return errors.New(fmt.Sprintf("Clone:%s", err))
 	}
-
+	defer repo.Free()
+	iter, err := repo.NewBranchIterator(git.BranchLocal)
+	defer iter.Free()
+	if err != nil {
+		return err
+	}
+	ref, _, err := iter.Next()
+	for err == nil {
+		name, _ := ref.Name()
+		ref.Free()
+		p.logger.Trace("Local branch: ", name)
+		ref, _, err = iter.Next()
+	}
 	toRemote, err := repo.Remotes.Create("to", to.HTTPURLToRepo)
-	defer toRemote.Free()
 	if err != nil {
 		return errors.New(fmt.Sprintf("toRemote Create:%s", err))
 	}
+	defer toRemote.Free()
 	toRemoteCb := git.RemoteCallbacks{
 		CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
 			cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.ToAccessToken)
@@ -325,60 +375,11 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 		return errors.New(fmt.Sprintf("toRemote ConnectFetch:%s", err))
 	}
 	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("开始拉取远程分支")
-
-	err = fromRemote.Fetch([]string{fmt.Sprintf("refs/heads/%s", fromBranch.Name)}, &git.FetchOptions{
-		RemoteCallbacks: git.RemoteCallbacks{
-			SidebandProgressCallback: func(str string) error {
-				p.logger.Logger.Trace("SidebandProgressCallback", str)
-				return nil
-			},
-			CompletionCallback: func(c git.RemoteCompletion) error {
-				p.logger.Logger.Trace("CompletionCallback", c)
-				return nil
-			},
-			CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
-				cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.FromAccessToken)
-				errStr := ""
-				if err != nil {
-					errStr = err.Error()
-				}
-				p.logger.Logger.Trace(fmt.Sprintf("CredentialsCallback url:%s,username_from_url:%s,err:%s", url, username_from_url, errStr))
-				return cred, err
-			},
-			TransferProgressCallback: func(stats git.TransferProgress) error {
-				p.logger.Logger.Trace(fmt.Sprintf(
-					"TransferProgressCallback IndexedObjects:%d,LocalObjects:%d,TotalObjects:%d,TotalDeltas:%d,ReceivedObjects:%d,ReceivedBytes:%d",
-					stats.IndexedObjects,stats.LocalObjects,stats.TotalObjects,stats.TotalDeltas,stats.ReceivedObjects,stats.ReceivedBytes,
-					))
-				return nil
-			},
-			UpdateTipsCallback: func(refname string, a *git.Oid, b *git.Oid) error {
-				p.logger.Logger.Trace(fmt.Sprintf("CompletionCallback refname:%s,a:%s,b:%s", refname, a.String(), b.String()))
-				return nil
-			},
-			CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
-				p.logger.Logger.Trace(fmt.Sprintf("CertificateCheckCallback cert:%v,CertificateCheckCallback:%s", cert.X509, hostname))
-				return nil
-			},
-			PackProgressCallback: func(stage int32, current, total uint32) error {
-				p.logger.Logger.Trace(fmt.Sprintf("PackProgressCallback stage:%d,current:%d,total:%d", stage, current, total))
-				return nil
-			},
-			PushTransferProgressCallback: func(current, total uint32, bytes uint) error {
-				p.logger.Logger.Trace(fmt.Sprintf("PushTransferProgressCallback current:%d,total:%d,bytes:%d", current, total, bytes))
-				return nil
-			},
-			PushUpdateReferenceCallback: func(refname, status string) error {
-				p.logger.Logger.Trace(fmt.Sprintf("PushUpdateReferenceCallback refname:%s,status:%s", refname, status))
-				return nil
-			},
-		},
-	}, "")
 	if err != nil {
 		return errors.New(fmt.Sprintf("fromRemote Fetch:%s", err))
 	}
 	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("开始推送远程分支")
-	err = toRemote.Push([]string{fmt.Sprintf("refs/remotes/from/%s:refs/remotes/to/%s", fromBranch.Name, fromBranch.Name)}, &git.PushOptions{
+	err = toRemote.Push([]string{fmt.Sprintf("refs/heads/%s", fromBranch.Name)}, &git.PushOptions{
 		RemoteCallbacks: git.RemoteCallbacks{
 			SidebandProgressCallback: func(str string) error {
 				p.logger.Logger.Trace("SidebandProgressCallback", str)
@@ -400,7 +401,7 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 			TransferProgressCallback: func(stats git.TransferProgress) error {
 				p.logger.Logger.Trace(fmt.Sprintf(
 					"TransferProgressCallback IndexedObjects:%d,LocalObjects:%d,TotalObjects:%d,TotalDeltas:%d,ReceivedObjects:%d,ReceivedBytes:%d",
-					stats.IndexedObjects,stats.LocalObjects,stats.TotalObjects,stats.TotalDeltas,stats.ReceivedObjects,stats.ReceivedBytes,
+					stats.IndexedObjects, stats.LocalObjects, stats.TotalObjects, stats.TotalDeltas, stats.ReceivedObjects, stats.ReceivedBytes,
 				))
 				return nil
 			},
