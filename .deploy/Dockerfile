@@ -46,4 +46,6 @@ ENTRYPOINT /entrypoint.sh
 
 WORKDIR /
 
+RUN rm -rf /opt
+
 EXPOSE 8081
