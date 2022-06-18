@@ -9,3 +9,4 @@ assets/db2
 .deploy/build.sh
 main
 tmp/
+.DS_Store

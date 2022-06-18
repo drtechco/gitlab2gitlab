@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/ahmetb/go-linq/v3 v3.2.0
-	github.com/go-git/go-git/v5 v5.4.2
+	github.com/libgit2/git2go/v33 v33.0.9
 	github.com/sirupsen/logrus v1.4.2
 	github.com/urfave/cli/v2 v2.8.1
 	github.com/xanzy/go-gitlab v0.68.0
@@ -21,6 +21,7 @@ require (
 	github.com/emirpasic/gods v1.12.0 // indirect
 	github.com/go-git/gcfg v1.5.0 // indirect
 	github.com/go-git/go-billy/v5 v5.3.1 // indirect
+	github.com/go-git/go-git/v5 v5.4.2 // indirect
 	github.com/go-sql-driver/mysql v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
@@ -32,6 +33,8 @@ require (
 	github.com/jinzhu/now v1.1.4 // indirect
 	github.com/kevinburke/ssh_config v0.0.0-20201106050909-4977a11b4351 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
+	github.com/ldez/go-git-cmd-wrapper/v2 v2.3.0 // indirect
+	github.com/libgit2/git2go v27.10.0+incompatible // indirect
 	github.com/mattn/go-sqlite3 v1.14.12 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -52,4 +55,8 @@ require (
 	gorm.io/datatypes v1.0.6 // indirect
 	gorm.io/driver/mysql v1.3.3 // indirect
 	gorm.io/hints v1.1.0 // indirect
+)
+
+replace (
+	github.com/libgit2/git2go/v33 v33.0.9 => ./git2go
 )

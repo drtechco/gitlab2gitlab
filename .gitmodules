@@ -1,0 +1,3 @@
+[submodule "git2go"]
+	path = git2go
+	url = https://github.com/drtechco/git2go

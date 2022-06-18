@@ -9,17 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ahmetb/go-linq/v3"
-	"github.com/go-git/go-billy/v5/osfs"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/libgit2/git2go/v33"
 	"github.com/sirupsen/logrus"
 	"github.com/xanzy/go-gitlab"
 	"os"
-	"path"
+
 	"strings"
 	"time"
 )
@@ -271,81 +265,249 @@ func (p *SyncPipe) ensureDir(dirName string) error {
 	}
 	return err
 }
+
+
+
 func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
-
-
-	storageDir := path.Join(configs.TempDir, "storage")
-	err := p.ensureDir(storageDir)
-	if err != nil {
-		return err
-	}
-	workTreeDir := path.Join(configs.TempDir, "worktree")
-	err = p.ensureDir(workTreeDir)
-	if err != nil {
-		return err
-	}
 	p.logger.
 		WithField("FromProject", p.ShortProject(from)).
 		WithField("ToProject", p.ShortProject(to)).
 		WithField("FromBranch", p.ShortBranch(fromBranch)).
 		Debug("开始推送分支")
-
-	storage := filesystem.NewStorage(osfs.New(storageDir), cache.NewObjectLRUDefault())
-	repo, err := git.Init(storage, osfs.New(workTreeDir))
+	err := p.ensureDir(configs.TempDir)
 	if err != nil {
 		return err
 	}
 	p.logger.Trace("创建git存储库")
-	currentConfig, err := repo.Config()
+	repo, err := git.InitRepository(configs.TempDir, true)
+	defer repo.Free()
 	if err != nil {
-		return err
+		return errors.New(fmt.Sprintf("InitRepository:%s", err))
 	}
-	currentConfig.Remotes["from"] = &config.RemoteConfig{
-		Name: "from",
-		URLs: []string{from.HTTPURLToRepo},
-	}
-	currentConfig.Remotes["to"] = &config.RemoteConfig{
-		Name: "to",
-		URLs: []string{to.HTTPURLToRepo},
-	}
-	p.logger.WithField("Remotes", currentConfig.Remotes).Trace("配置git Remotes")
-	err = repo.SetConfig(currentConfig)
+	fromRemote, err := repo.Remotes.Create("from", from.HTTPURLToRepo)
+	defer fromRemote.Free()
 	if err != nil {
-		return err
+		return errors.New(fmt.Sprintf("fromRemote Create:%s", err))
 	}
-	workTree, err := repo.Worktree()
+	fromRemoteCbFun := func() git.RemoteCallbacks {
+		return git.RemoteCallbacks{
+			CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
+				cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.FromAccessToken)
+				return cred, err
+			},
+			CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+				return nil
+			},
+		}
+	}
+	fromRemoteCb := fromRemoteCbFun()
+	err = fromRemote.ConnectFetch(&fromRemoteCb, nil, nil)
 	if err != nil {
-		return err
+		return errors.New(fmt.Sprintf("fromRemote ConnectFetch:%s", err))
 	}
-	err = workTree.Pull(&git.PullOptions{
-		RemoteName:    "from",
-		ReferenceName: plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", fromBranch.Name)),
-		SingleBranch:  true,
-		Auth: &http.BasicAuth{
-			Username: "gl2gl_sync", // yes, this can be anything except an empty string
-			Password: p.FromAccessToken,
+
+	toRemote, err := repo.Remotes.Create("to", to.HTTPURLToRepo)
+	defer toRemote.Free()
+	if err != nil {
+		return errors.New(fmt.Sprintf("toRemote Create:%s", err))
+	}
+	toRemoteCb := git.RemoteCallbacks{
+		CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
+			cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.ToAccessToken)
+			return cred, err
+		},
+		CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+			return nil
+		},
+	}
+	err = toRemote.ConnectFetch(&toRemoteCb, nil, nil)
+	if err != nil {
+		return errors.New(fmt.Sprintf("toRemote ConnectFetch:%s", err))
+	}
+	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("开始拉取远程分支")
+
+	err = fromRemote.Fetch([]string{fmt.Sprintf("refs/heads/%s", fromBranch.Name)}, &git.FetchOptions{
+		RemoteCallbacks: git.RemoteCallbacks{
+			SidebandProgressCallback: func(str string) error {
+				p.logger.Logger.Trace("SidebandProgressCallback", str)
+				return nil
+			},
+			CompletionCallback: func(c git.RemoteCompletion) error {
+				p.logger.Logger.Trace("CompletionCallback", c)
+				return nil
+			},
+			CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
+				cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.FromAccessToken)
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				}
+				p.logger.Logger.Trace(fmt.Sprintf("CredentialsCallback url:%s,username_from_url:%s,err:%s", url, username_from_url, errStr))
+				return cred, err
+			},
+			TransferProgressCallback: func(stats git.TransferProgress) error {
+				p.logger.Logger.Trace(fmt.Sprintf(
+					"TransferProgressCallback IndexedObjects:%d,LocalObjects:%d,TotalObjects:%d,TotalDeltas:%d,ReceivedObjects:%d,ReceivedBytes:%d",
+					stats.IndexedObjects,stats.LocalObjects,stats.TotalObjects,stats.TotalDeltas,stats.ReceivedObjects,stats.ReceivedBytes,
+					))
+				return nil
+			},
+			UpdateTipsCallback: func(refname string, a *git.Oid, b *git.Oid) error {
+				p.logger.Logger.Trace(fmt.Sprintf("CompletionCallback refname:%s,a:%s,b:%s", refname, a.String(), b.String()))
+				return nil
+			},
+			CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+				p.logger.Logger.Trace(fmt.Sprintf("CertificateCheckCallback cert:%v,CertificateCheckCallback:%s", cert.X509, hostname))
+				return nil
+			},
+			PackProgressCallback: func(stage int32, current, total uint32) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PackProgressCallback stage:%d,current:%d,total:%d", stage, current, total))
+				return nil
+			},
+			PushTransferProgressCallback: func(current, total uint32, bytes uint) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PushTransferProgressCallback current:%d,total:%d,bytes:%d", current, total, bytes))
+				return nil
+			},
+			PushUpdateReferenceCallback: func(refname, status string) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PushUpdateReferenceCallback refname:%s,status:%s", refname, status))
+				return nil
+			},
+		},
+	}, "")
+	if err != nil {
+		return errors.New(fmt.Sprintf("fromRemote Fetch:%s", err))
+	}
+	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("开始推送远程分支")
+	err = toRemote.Push([]string{fmt.Sprintf("refs/remotes/from/%s:refs/remotes/to/%s", fromBranch.Name, fromBranch.Name)}, &git.PushOptions{
+		RemoteCallbacks: git.RemoteCallbacks{
+			SidebandProgressCallback: func(str string) error {
+				p.logger.Logger.Trace("SidebandProgressCallback", str)
+				return nil
+			},
+			CompletionCallback: func(c git.RemoteCompletion) error {
+				p.logger.Logger.Trace("CompletionCallback", c)
+				return nil
+			},
+			CredentialsCallback: func(url string, username_from_url string, allowed_types git.CredentialType) (*git.Credential, error) {
+				cred, err := git.NewCredentialUserpassPlaintext("gl2gl_sync", p.ToAccessToken)
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				}
+				p.logger.Logger.Trace(fmt.Sprintf("CredentialsCallback url:%s,username_from_url:%s,err:%s", url, username_from_url, errStr))
+				return cred, err
+			},
+			TransferProgressCallback: func(stats git.TransferProgress) error {
+				p.logger.Logger.Trace(fmt.Sprintf(
+					"TransferProgressCallback IndexedObjects:%d,LocalObjects:%d,TotalObjects:%d,TotalDeltas:%d,ReceivedObjects:%d,ReceivedBytes:%d",
+					stats.IndexedObjects,stats.LocalObjects,stats.TotalObjects,stats.TotalDeltas,stats.ReceivedObjects,stats.ReceivedBytes,
+				))
+				return nil
+			},
+			UpdateTipsCallback: func(refname string, a *git.Oid, b *git.Oid) error {
+				p.logger.Logger.Trace(fmt.Sprintf("CompletionCallback refname:%s,a:%s,b:%s", refname, a.String(), b.String()))
+				return nil
+			},
+			CertificateCheckCallback: func(cert *git.Certificate, valid bool, hostname string) error {
+				p.logger.Logger.Trace(fmt.Sprintf("CertificateCheckCallback cert:%v,CertificateCheckCallback:%s", cert.X509, hostname))
+				return nil
+			},
+			PackProgressCallback: func(stage int32, current, total uint32) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PackProgressCallback stage:%d,current:%d,total:%d", stage, current, total))
+				return nil
+			},
+			PushTransferProgressCallback: func(current, total uint32, bytes uint) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PushTransferProgressCallback current:%d,total:%d,bytes:%d", current, total, bytes))
+				return nil
+			},
+			PushUpdateReferenceCallback: func(refname, status string) error {
+				p.logger.Logger.Trace(fmt.Sprintf("PushUpdateReferenceCallback refname:%s,status:%s", refname, status))
+				return nil
+			},
 		},
 	})
-	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("拉取远程分支代码")
 	if err != nil {
-		return err
+		return errors.New(fmt.Sprintf("toRemote Push:%s", err))
 	}
-	refSpecs := []config.RefSpec{
-		config.RefSpec(fmt.Sprintf("+refs/heads/master:refs/heads/%s", fromBranch.Name)),
-	}
-	err = repo.Push(&git.PushOptions{
-		RefSpecs:   refSpecs,
-		RemoteName: "to",
-		Auth: &http.BasicAuth{
-			Username: "gl2gl_sync", // yes, this can be anything except an empty string
-			Password: p.ToAccessToken,
-		},
-	})
-	repo = nil
-	storage = nil
-	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("推送本地分支到远程分支")
-	return err
+	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("完成推送本地分支到远程分支")
+	return nil
 }
+
+//func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *gitlab.Branch) error {
+//
+//
+//	storageDir := path.Join(configs.TempDir, "storage")
+//	err := p.ensureDir(storageDir)
+//	if err != nil {
+//		return err
+//	}
+//	workTreeDir := path.Join(configs.TempDir, "worktree")
+//	err = p.ensureDir(workTreeDir)
+//	if err != nil {
+//		return err
+//	}
+//	p.logger.
+//		WithField("FromProject", p.ShortProject(from)).
+//		WithField("ToProject", p.ShortProject(to)).
+//		WithField("FromBranch", p.ShortBranch(fromBranch)).
+//		Debug("开始推送分支")
+//
+//	storage := filesystem.NewStorage(osfs.New(storageDir), cache.NewObjectLRUDefault())
+//	repo, err := git.Init(storage, osfs.New(workTreeDir))
+//	if err != nil {
+//		return err
+//	}
+//	p.logger.Trace("创建git存储库")
+//	currentConfig, err := repo.Config()
+//	if err != nil {
+//		return err
+//	}
+//	currentConfig.Remotes["from"] = &config.RemoteConfig{
+//		Name: "from",
+//		URLs: []string{from.HTTPURLToRepo},
+//	}
+//	currentConfig.Remotes["to"] = &config.RemoteConfig{
+//		Name: "to",
+//		URLs: []string{to.HTTPURLToRepo},
+//	}
+//	p.logger.WithField("Remotes", currentConfig.Remotes).Trace("配置git Remotes")
+//	err = repo.SetConfig(currentConfig)
+//	if err != nil {
+//		return err
+//	}
+//	workTree, err := repo.Worktree()
+//	if err != nil {
+//		return err
+//	}
+//	err = workTree.Pull(&git.PullOptions{
+//		RemoteName:    "from",
+//		ReferenceName: plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", fromBranch.Name)),
+//		SingleBranch:  true,
+//		Auth: &http.BasicAuth{
+//			Username: "gl2gl_sync", // yes, this can be anything except an empty string
+//			Password: p.FromAccessToken,
+//		},
+//	})
+//	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("拉取远程分支代码")
+//	if err != nil {
+//		return err
+//	}
+//	refSpecs := []config.RefSpec{
+//		config.RefSpec(fmt.Sprintf("+refs/heads/master:refs/heads/%s", fromBranch.Name)),
+//	}
+//	err = repo.Push(&git.PushOptions{
+//		RefSpecs:   refSpecs,
+//		RemoteName: "to",
+//		Auth: &http.BasicAuth{
+//			Username: "gl2gl_sync", // yes, this can be anything except an empty string
+//			Password: p.ToAccessToken,
+//		},
+//	})
+//	repo = nil
+//	storage = nil
+//	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("推送本地分支到远程分支")
+//	return err
+//}
 
 func (p *SyncPipe) SyncBranch(from *gitlab.Project, to *gitlab.Project) (error, map[*gitlab.Branch]*gitlab.Branch) {
 	p.logger.WithField("FromProject", p.ShortProject(from)).
