@@ -4,6 +4,7 @@ import (
 	"context"
 	"drtech.co/gl2gl/core/configs"
 	"drtech.co/gl2gl/orm/query"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -34,6 +35,15 @@ func GetDb() *gorm.DB {
 }
 
 func InitDb() error {
+	db, err := _forkDb.DB()
+	if err != nil {
+		return err
+	}
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Println(conn)
 	return nil
 }
 

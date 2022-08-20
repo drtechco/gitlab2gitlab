@@ -4,21 +4,23 @@
 
 package model
 
-import "database/sql"
+import (
+	"time"
+)
 
 const TableNameFromToConfig = "from_to_config"
 
 // FromToConfig mapped from table <from_to_config>
 type FromToConfig struct {
-	ID              sql.NullInt64  `gorm:"column:id;type:INTEGER" json:"id"`
-	FromAddress     sql.NullString `gorm:"column:from_address;type:TEXT" json:"from_address"`
-	FromAccessToken sql.NullString `gorm:"column:from_access_token;type:TEXT" json:"from_access_token"`
-	ToAddress       sql.NullString `gorm:"column:to_address;type:TEXT" json:"to_address"`
-	ToAccessToken   sql.NullString `gorm:"column:to_access_token;type:TEXT" json:"to_access_token"`
-	Status          sql.NullInt64  `gorm:"column:status;type:INTEGER" json:"status"`
-	DeleteBranch    sql.NullInt64  `gorm:"column:delete_ branch;type:INTEGER" json:"delete_ branch"`
-	LastSyncTime    sql.NullTime   `gorm:"column:last_sync_time;type:datetime" json:"last_sync_time"`
-	LastSyncStatus  sql.NullInt64  `gorm:"column:last_sync_status;type:INTEGER" json:"last_sync_status"`
+	ID              int32     `gorm:"column:id;type:INTEGER" json:"id"`
+	FromAddress     string    `gorm:"column:from_address;type:TEXT" json:"from_address"`
+	FromAccessToken string    `gorm:"column:from_access_token;type:TEXT" json:"from_access_token"`
+	ToAddress       string    `gorm:"column:to_address;type:TEXT" json:"to_address"`
+	ToAccessToken   string    `gorm:"column:to_access_token;type:TEXT" json:"to_access_token"`
+	Status          int32     `gorm:"column:status;type:INTEGER" json:"status"`
+	DeleteBranch    int32     `gorm:"column:delete_ branch;type:INTEGER" json:"delete_ branch"`
+	LastSyncTime    time.Time `gorm:"column:last_sync_time;type:datetime" json:"last_sync_time"`
+	LastSyncStatus  int32     `gorm:"column:last_sync_status;type:INTEGER" json:"last_sync_status"`
 }
 
 // TableName FromToConfig's table name

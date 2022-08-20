@@ -15,7 +15,7 @@ func main() {
 
 		/* Mode: gen.WithoutContext|gen.WithDefaultQuery*/
 		//if you want the nullable field generation property to be pointer type, set FieldNullable true
-		/* FieldNullable: true,*/
+		//FieldNullable: true,
 		//if you want to generate index tags from database, set FieldWithIndexTag true
 		/* FieldWithIndexTag: true,*/
 		//if you want to generate type tags from database, set FieldWithTypeTag true
@@ -41,7 +41,13 @@ func main() {
 	//	g.ApplyBasic(m)
 	//}
 
-	g.ApplyBasic(g.GenerateModel("from_to_config"))
+	g.ApplyBasic(
+		g.GenerateModel("error_code"),
+		g.GenerateModel("i18n"),
+		g.GenerateModel("lang"),
+		g.GenerateModel("from_to_config"),
+		g.GenerateModel("admin"),
+	)
 
 	//g.GenerateAllTable()
 

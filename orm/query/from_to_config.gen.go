@@ -14,6 +14,8 @@ import (
 	"gorm.io/gen"
 	"gorm.io/gen/field"
 
+	"gorm.io/plugin/dbresolver"
+
 	"drtech.co/gl2gl/orm/model"
 )
 
@@ -25,15 +27,15 @@ func newFromToConfig(db *gorm.DB) fromToConfig {
 
 	tableName := _fromToConfig.fromToConfigDo.TableName()
 	_fromToConfig.ALL = field.NewField(tableName, "*")
-	_fromToConfig.ID = field.NewField(tableName, "id")
-	_fromToConfig.FromAddress = field.NewField(tableName, "from_address")
-	_fromToConfig.FromAccessToken = field.NewField(tableName, "from_access_token")
-	_fromToConfig.ToAddress = field.NewField(tableName, "to_address")
-	_fromToConfig.ToAccessToken = field.NewField(tableName, "to_access_token")
-	_fromToConfig.Status = field.NewField(tableName, "status")
-	_fromToConfig.DeleteBranch = field.NewField(tableName, "delete_ branch")
-	_fromToConfig.LastSyncTime = field.NewField(tableName, "last_sync_time")
-	_fromToConfig.LastSyncStatus = field.NewField(tableName, "last_sync_status")
+	_fromToConfig.ID = field.NewInt32(tableName, "id")
+	_fromToConfig.FromAddress = field.NewString(tableName, "from_address")
+	_fromToConfig.FromAccessToken = field.NewString(tableName, "from_access_token")
+	_fromToConfig.ToAddress = field.NewString(tableName, "to_address")
+	_fromToConfig.ToAccessToken = field.NewString(tableName, "to_access_token")
+	_fromToConfig.Status = field.NewInt32(tableName, "status")
+	_fromToConfig.DeleteBranch = field.NewInt32(tableName, "delete_ branch")
+	_fromToConfig.LastSyncTime = field.NewTime(tableName, "last_sync_time")
+	_fromToConfig.LastSyncStatus = field.NewInt32(tableName, "last_sync_status")
 
 	_fromToConfig.fillFieldMap()
 
@@ -44,15 +46,15 @@ type fromToConfig struct {
 	fromToConfigDo fromToConfigDo
 
 	ALL             field.Field
-	ID              field.Field
-	FromAddress     field.Field
-	FromAccessToken field.Field
-	ToAddress       field.Field
-	ToAccessToken   field.Field
-	Status          field.Field
-	DeleteBranch    field.Field
-	LastSyncTime    field.Field
-	LastSyncStatus  field.Field
+	ID              field.Int32
+	FromAddress     field.String
+	FromAccessToken field.String
+	ToAddress       field.String
+	ToAccessToken   field.String
+	Status          field.Int32
+	DeleteBranch    field.Int32
+	LastSyncTime    field.Time
+	LastSyncStatus  field.Int32
 
 	fieldMap map[string]field.Expr
 }
@@ -69,15 +71,15 @@ func (f fromToConfig) As(alias string) *fromToConfig {
 
 func (f *fromToConfig) updateTableName(table string) *fromToConfig {
 	f.ALL = field.NewField(table, "*")
-	f.ID = field.NewField(table, "id")
-	f.FromAddress = field.NewField(table, "from_address")
-	f.FromAccessToken = field.NewField(table, "from_access_token")
-	f.ToAddress = field.NewField(table, "to_address")
-	f.ToAccessToken = field.NewField(table, "to_access_token")
-	f.Status = field.NewField(table, "status")
-	f.DeleteBranch = field.NewField(table, "delete_ branch")
-	f.LastSyncTime = field.NewField(table, "last_sync_time")
-	f.LastSyncStatus = field.NewField(table, "last_sync_status")
+	f.ID = field.NewInt32(table, "id")
+	f.FromAddress = field.NewString(table, "from_address")
+	f.FromAccessToken = field.NewString(table, "from_access_token")
+	f.ToAddress = field.NewString(table, "to_address")
+	f.ToAccessToken = field.NewString(table, "to_access_token")
+	f.Status = field.NewInt32(table, "status")
+	f.DeleteBranch = field.NewInt32(table, "delete_ branch")
+	f.LastSyncTime = field.NewTime(table, "last_sync_time")
+	f.LastSyncStatus = field.NewInt32(table, "last_sync_status")
 
 	f.fillFieldMap()
 
@@ -127,6 +129,14 @@ func (f fromToConfigDo) Debug() *fromToConfigDo {
 
 func (f fromToConfigDo) WithContext(ctx context.Context) *fromToConfigDo {
 	return f.withDO(f.DO.WithContext(ctx))
+}
+
+func (f fromToConfigDo) ReadDB() *fromToConfigDo {
+	return f.Clauses(dbresolver.Read)
+}
+
+func (f fromToConfigDo) WriteDB() *fromToConfigDo {
+	return f.Clauses(dbresolver.Write)
 }
 
 func (f fromToConfigDo) Clauses(conds ...clause.Expression) *fromToConfigDo {
@@ -328,6 +338,10 @@ func (f fromToConfigDo) ScanByPage(result interface{}, offset int, limit int) (c
 
 	err = f.Offset(offset).Limit(limit).Scan(result)
 	return
+}
+
+func (f fromToConfigDo) Scan(result interface{}) (err error) {
+	return f.DO.Scan(result)
 }
 
 func (f *fromToConfigDo) withDO(do gen.Dao) *fromToConfigDo {

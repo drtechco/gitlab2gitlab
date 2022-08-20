@@ -17,25 +17,23 @@ const (
 	SyncPipeStatusToClientInitError   SyncPipeStatus = 104
 	SyncPipeStatusInitOk              SyncPipeStatus = 105
 
-	SyncPipeStatusGetFromGroups        SyncPipeStatus = 206
-	SyncPipeStatusGetFromGroupsError   SyncPipeStatus = 207
-	SyncPipeStatusGetToGroups        SyncPipeStatus = 208
-	SyncPipeStatusGetToGroupsError   SyncPipeStatus = 209
-	SyncPipeStatusCreateToGroup  SyncPipeStatus = 210
-	SyncPipeStatusCreateToGroupErr  SyncPipeStatus = 210
-	SyncPipeStatusGetFromGroupProjects  SyncPipeStatus = 211
-	SyncPipeStatusGetFromGroupProjectsErr  SyncPipeStatus = 212
-	SyncPipeStatusCreateToProject  SyncPipeStatus = 213
-	SyncPipeStatusCreateToProjectErr  SyncPipeStatus = 214
-	SyncPipeStatusGetFromBranches  SyncPipeStatus = 215
-	SyncPipeStatusGetFromBranchesError  SyncPipeStatus = 216
-	SyncPipeStatusGetToBranches  SyncPipeStatus = 217
-	SyncPipeStatusGetToBranchesError  SyncPipeStatus = 218
+	SyncPipeStatusGetFromGroups           SyncPipeStatus = 206
+	SyncPipeStatusGetFromGroupsError      SyncPipeStatus = 207
+	SyncPipeStatusGetToGroups             SyncPipeStatus = 208
+	SyncPipeStatusGetToGroupsError        SyncPipeStatus = 209
+	SyncPipeStatusCreateToGroup           SyncPipeStatus = 210
+	SyncPipeStatusCreateToGroupErr        SyncPipeStatus = 210
+	SyncPipeStatusGetFromGroupProjects    SyncPipeStatus = 211
+	SyncPipeStatusGetFromGroupProjectsErr SyncPipeStatus = 212
+	SyncPipeStatusCreateToProject         SyncPipeStatus = 213
+	SyncPipeStatusCreateToProjectErr      SyncPipeStatus = 214
+	SyncPipeStatusGetFromBranches         SyncPipeStatus = 215
+	SyncPipeStatusGetFromBranchesError    SyncPipeStatus = 216
+	SyncPipeStatusGetToBranches           SyncPipeStatus = 217
+	SyncPipeStatusGetToBranchesError      SyncPipeStatus = 218
 
-
-	SyncPipeStatusGetToGroupProjects  SyncPipeStatus = 211
-	SyncPipeStatusGetToGroupProjectsErr  SyncPipeStatus = 212
-
+	SyncPipeStatusGetToGroupProjects    SyncPipeStatus = 211
+	SyncPipeStatusGetToGroupProjectsErr SyncPipeStatus = 212
 
 	SyncPipeStatusGetFromProjects      SyncPipeStatus = 206
 	SyncPipeStatusGetFromProjectsError SyncPipeStatus = 207
@@ -45,7 +43,7 @@ const (
 )
 
 var syncPipeMapLock sync.Mutex
-var syncPipeMap map[int64]*SyncPipe
+var syncPipeMap map[int32]*SyncPipe
 
 func Setup() error {
 
@@ -100,18 +98,18 @@ func makeSyncPipe() {
 			}
 		}
 	}
-	syncPipeMap = make(map[int64]*SyncPipe)
+	syncPipeMap = make(map[int32]*SyncPipe)
 }
 
 func initSyncPipe(config *model.FromToConfig) error {
 	pipe := &SyncPipe{
-		ConfigId:        config.ID.Int64,
-		FromAddress:     config.FromAddress.String,
-		FromAccessToken: config.FromAccessToken.String,
+		ConfigId:        config.ID,
+		FromAddress:     config.FromAddress,
+		FromAccessToken: config.FromAccessToken,
 		Status:          SyncPipeStatusNotInit,
-		ToAddress:       config.ToAddress.String,
-		ToAccessToken:   config.ToAccessToken.String,
+		ToAddress:       config.ToAddress,
+		ToAccessToken:   config.ToAccessToken,
 	}
-	syncPipeMap[config.ID.Int64] = pipe
+	syncPipeMap[config.ID] = pipe
 	return nil
 }

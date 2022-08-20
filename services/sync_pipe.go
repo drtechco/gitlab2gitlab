@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"drtech.co/gl2gl/core/configs"
 	"drtech.co/gl2gl/orm"
 	"errors"
@@ -19,7 +18,7 @@ import (
 )
 
 type SyncPipe struct {
-	ConfigId        int64
+	ConfigId        int32
 	FromAddress     string
 	FromAccessToken string
 	FromClient      *gitlab.Client
@@ -62,7 +61,7 @@ func (p *SyncPipe) Run() error {
 func (p *SyncPipe) UpdateStatus(status SyncPipeStatus) {
 	fromToConfigM := orm.DbQuery().FromToConfig
 	_, err := fromToConfigM.WithContext(context.Background()).
-		Where(fromToConfigM.ID.Eq(sql.NullInt64{Int64: p.ConfigId, Valid: true})).Update(fromToConfigM.Status, status)
+		Where(fromToConfigM.ID.Eq(p.ConfigId)).Update(fromToConfigM.Status, status)
 	if err != nil {
 		p.logger.Error("UpdateStatus:", err)
 	}
@@ -237,7 +236,7 @@ func (p *SyncPipe) SyncProjectData(from *gitlab.Project, to *gitlab.Project) err
 					WithField("ToProject", p.ShortProject(to)).
 					WithField("FromBranch", p.ShortBranch(fromBranch)).
 					Error("PushTo:", err)
-				os.Exit(9)
+				//os.Exit(9)
 			}
 		}
 	}

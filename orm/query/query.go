@@ -14,14 +14,22 @@ import (
 func Use(db *gorm.DB) *Query {
 	return &Query{
 		db:           db,
+		Admin:        newAdmin(db),
+		ErrorCode:    newErrorCode(db),
 		FromToConfig: newFromToConfig(db),
+		I18n:         newI18n(db),
+		Lang:         newLang(db),
 	}
 }
 
 type Query struct {
 	db *gorm.DB
 
+	Admin        admin
+	ErrorCode    errorCode
 	FromToConfig fromToConfig
+	I18n         i18n
+	Lang         lang
 }
 
 func (q *Query) Available() bool { return q.db != nil }
@@ -29,17 +37,29 @@ func (q *Query) Available() bool { return q.db != nil }
 func (q *Query) clone(db *gorm.DB) *Query {
 	return &Query{
 		db:           db,
+		Admin:        q.Admin.clone(db),
+		ErrorCode:    q.ErrorCode.clone(db),
 		FromToConfig: q.FromToConfig.clone(db),
+		I18n:         q.I18n.clone(db),
+		Lang:         q.Lang.clone(db),
 	}
 }
 
 type queryCtx struct {
-	FromToConfig fromToConfigDo
+	Admin        *adminDo
+	ErrorCode    *errorCodeDo
+	FromToConfig *fromToConfigDo
+	I18n         *i18nDo
+	Lang         *langDo
 }
 
 func (q *Query) WithContext(ctx context.Context) *queryCtx {
 	return &queryCtx{
-		FromToConfig: *q.FromToConfig.WithContext(ctx),
+		Admin:        q.Admin.WithContext(ctx),
+		ErrorCode:    q.ErrorCode.WithContext(ctx),
+		FromToConfig: q.FromToConfig.WithContext(ctx),
+		I18n:         q.I18n.WithContext(ctx),
+		Lang:         q.Lang.WithContext(ctx),
 	}
 }
 
