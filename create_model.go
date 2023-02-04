@@ -7,7 +7,7 @@ import (
 	"log"
 )
 
-func main() {
+func main2() {
 	g := gen.NewGenerator(gen.Config{
 		OutPath:      "./orm/query",
 		OutFile:      "./orm/query/query.go",

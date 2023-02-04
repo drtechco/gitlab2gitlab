@@ -665,13 +665,14 @@ func (p *SyncPipe) SyncUser() error {
 				Username:            &fromUser.Username,
 				ForceRandomPassword: &randomPassword,
 			})
-			p.logger.WithField("ToUser", p.ShortUser(toUser)).Debug("完成目标库的用户创建")
 			if err != nil {
 				p.logger.
 					WithField("FromUser", p.ShortUser(fromUser)).
 					Error("CreateUser:", err)
 				continue
 			}
+			p.logger.WithField("ToUser", p.ShortUser(toUser)).Debug("完成目标库的用户创建")
+
 		} else {
 			toUser = toUserT.(*gitlab.User)
 		}
