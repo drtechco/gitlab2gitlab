@@ -8,18 +8,18 @@ RUN echo "Asia/Shanghai"  > /etc/timezone
 
 RUN apk update
 
-RUN apk add pkgconfig go cmake make
+RUN apk add pkgconfig go cmake make python3
 
 COPY . /opt
 
 WORKDIR /opt
 
-RUN rm -rf /opt/vendor/github.com/libgit2/git2go/v33
+RUN rm -rf /opt/vendor/github.com/libgit2/git2go/v34
 
 #RUN /opt/.deploy/build2.sh
-RUN  ls -la & go get github.com/libgit2/git2go/v33
+RUN  ls -la & go get github.com/libgit2/git2go/v34
 
-RUN ln -s /opt/git2go /opt/vendor/github.com/libgit2/git2go/v33
+RUN ln -s /opt/git2go /opt/vendor/github.com/libgit2/git2go/v34
 
 
 WORKDIR /opt/git2go

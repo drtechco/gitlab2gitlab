@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ahmetb/go-linq/v3"
-	"github.com/libgit2/git2go/v33"
+	git "github.com/libgit2/git2go/v34"
 	"github.com/sirupsen/logrus"
 	"github.com/xanzy/go-gitlab"
 	"os"
@@ -277,6 +277,7 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 		return err
 	}
 	p.logger.Trace("创建git存储库")
+
 	repo, err := git.Clone(from.HTTPURLToRepo, configs.TempDir, &git.CloneOptions{
 		CheckoutOptions: git.CheckoutOptions{
 
@@ -377,6 +378,7 @@ func (p *SyncPipe) PushTo(from *gitlab.Project, to *gitlab.Project, fromBranch *
 	if err != nil {
 		return errors.New(fmt.Sprintf("fromRemote Fetch:%s", err))
 	}
+
 	p.logger.WithField("FromBranch", p.ShortBranch(fromBranch)).Trace("开始推送远程分支")
 	err = toRemote.Push([]string{fmt.Sprintf("refs/heads/%s", fromBranch.Name)}, &git.PushOptions{
 		RemoteCallbacks: git.RemoteCallbacks{

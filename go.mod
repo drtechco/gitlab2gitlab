@@ -1,12 +1,11 @@
 module drtech.co/gl2gl
 
-go 1.17
+go 1.20
 
 require (
 	github.com/ahmetb/go-linq/v3 v3.2.0
 	github.com/json-iterator/go v1.1.12
 	github.com/kataras/iris/v12 v12.2.0-beta3.0.20220707065724-874266d23c32
-	github.com/libgit2/git2go/v33 v33.0.9
 	github.com/modern-go/reflect2 v1.0.2
 	github.com/sirupsen/logrus v1.8.1
 	github.com/urfave/cli/v2 v2.8.1
@@ -62,6 +61,7 @@ require (
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/ldez/go-git-cmd-wrapper/v2 v2.3.0 // indirect
 	github.com/libgit2/git2go v27.10.0+incompatible // indirect
+	github.com/libgit2/git2go/v34 v34.0.0 // indirect
 	github.com/mailgun/raymond/v2 v2.0.46 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-sqlite3 v1.14.12 // indirect
@@ -79,14 +79,14 @@ require (
 	github.com/xanzy/ssh-agent v0.3.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	github.com/yosssi/ace v0.0.5 // indirect
-	golang.org/x/crypto v0.0.0-20220507011949-2cf3adece122 // indirect
-	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/net v0.0.0-20220520000938-2e3eb7b945c2 // indirect
+	golang.org/x/crypto v0.9.0 // indirect
+	golang.org/x/mod v0.8.0 // indirect
+	golang.org/x/net v0.10.0 // indirect
 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5 // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
-	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/sys v0.8.0 // indirect
+	golang.org/x/text v0.9.0 // indirect
 	golang.org/x/time v0.0.0-20220411224347-583f2d630306 // indirect
-	golang.org/x/tools v0.1.11 // indirect
+	golang.org/x/tools v0.6.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
@@ -99,4 +99,4 @@ require (
 	gorm.io/plugin/dbresolver v1.2.1 // indirect
 )
 
-replace github.com/libgit2/git2go/v33 v33.0.9 => ./git2go
+replace github.com/libgit2/git2go/v34 v34.0.0 => ./git2go
