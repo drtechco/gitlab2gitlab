@@ -1,5 +1,6 @@
 # gitlab2gitlab
 ```shell
+#git clone --branch http-go-transport-fix-2 https://github.com/darkowlzz/git2go.git
 git submodule update --init 
 cd ./git2go
 git submodule update --init 

@@ -26,7 +26,7 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "db",
-				Value:   "./assets/db",
+				Value:   "./assets/db.db",
 				Usage:   "-db ./assets/db",
 				EnvVars: []string{"DB"},
 			},

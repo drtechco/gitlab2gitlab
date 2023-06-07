@@ -1,3 +1,4 @@
 [submodule "git2go"]
 	path = git2go
-	url = https://github.com/libgit2/git2go
+	url = https://github.com/darkowlzz/git2go
+    branch = http-go-transport-fix-2
