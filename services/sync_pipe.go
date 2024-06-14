@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"drtech.co/gl2gl/core/configs"
 	"drtech.co/gl2gl/orm"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/xanzy/go-gitlab"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -44,14 +46,19 @@ func (p *SyncPipe) Stop() error {
 func (p *SyncPipe) Run() error {
 	p.logger = logrus.WithField("Name", "SyncPipe")
 	p.UpdateStatus(SyncPipeStatusIniting)
-	fromClient, err := gitlab.NewClient(p.FromAccessToken, gitlab.WithBaseURL(
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	fromClient, err := gitlab.NewClient(p.FromAccessToken, gitlab.WithHTTPClient(httpClient), gitlab.WithBaseURL(
 		fmt.Sprintf("%s/api/v4", p.FromAddress),
 	))
 	if err != nil {
 		p.UpdateStatus(SyncPipeStatusFromClientInitError)
 		return err
 	}
-	toClient, err := gitlab.NewClient(p.ToAccessToken, gitlab.WithBaseURL(
+	toClient, err := gitlab.NewClient(p.ToAccessToken, gitlab.WithHTTPClient(httpClient), gitlab.WithBaseURL(
 		fmt.Sprintf("%s/api/v4", p.ToAddress),
 	))
 	if err != nil {
